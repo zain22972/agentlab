@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff mypy click pydantic pyyaml pytest pytest-asyncio
+          pip install ruff mypy click pydantic pyyaml pytest pytest-asyncio hypothesis
       
       - name: Run ruff linter
         run: PYTHONPATH=src python -m ruff check src/ tests/
@@ -53,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio click pydantic pyyaml
+          pip install pytest pytest-asyncio click pydantic pyyaml hypothesis
       
       - name: Run pytest
         run: PYTHONPATH=src python -m pytest tests/ -v
