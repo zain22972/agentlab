@@ -1,0 +1,28 @@
+# Holdout scenarios are instructor-controlled and must never enter the public repo.
+# See docs/spec (section 14 splits, section 25 layout) and acceptance criterion 1.
+scenarios/holdout/
+
+# Trial and experiment artifacts are reproducible outputs, not sources.
+artifacts/
+*.partial/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+Thumbs.db

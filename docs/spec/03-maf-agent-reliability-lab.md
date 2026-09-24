@@ -4,7 +4,7 @@
 **Default recommendation:** Build the narrowed MAF-native reliability lab described here  
 **Best solo-student balance:** One domain, one agent, deterministic state oracles, repeated trials, paired regression, fault injection, replayable evidence, and command-line-first delivery  
 **Delivery window:** 8–10 weeks  
-**Reference implementation:** Python 3.12, Microsoft Agent Framework (MAF), FastAPI, pytest, Pydantic, OpenTelemetry  
+**Reference implementation:** Python 3.12 (pinned `>=3.12,<3.13`), `agent-framework-core==1.19.0`, FastAPI, pytest, Hypothesis, Pydantic, OpenTelemetry, `numpy==2.5.3`. Optional retrieval extra: `qdrant-client==1.19.1`, `fastembed==0.8.1`, `rank-bm25==0.2.2`. All versions verified on PyPI at pin time; `numpy 2.5.3` itself requires Python ≥3.12, which the interpreter pin already satisfies.  
 **Demonstration domain:** Simulated customer-support refund agent  
 **Research cutoff represented by the source memo:** 2026-09-12
 
@@ -24,6 +24,22 @@ Requirements written with **shall**, **must**, or **may** are normative project 
 > **Mutable provider caveat — Verified:** Hosted model behavior, model identifiers, availability, rate limits, and provider pricing can change. Every live benchmark must record its date, exact provider/model identifier, parameters, and available provider request metadata. **Recheck current models and prices against the provider's first-party documentation immediately before budgeting or running a live benchmark.** Cost figures here are planning targets, not price quotes.
 
 > **Source-use note:** All source-derived prose in this document is paraphrased. Exact URLs are supplied so readers can inspect the primary material. No source is reproduced at length.
+
+> **Settled implementation decisions.** The following were resolved before implementation began and are recorded here so the rest of the document is read against them. Terminology is defined in `CONTEXT.md`; the retirement of "run" as a noun is recorded in `docs/adr/0001-trial-and-experiment-replace-run.md`.
+>
+> | Decision | Resolution |
+> |---|---|
+> | Code location | Repository root of `agentlab`; this spec lives in `docs/spec/` |
+> | Python | Pinned 3.12 via `.python-version` and `requires-python = ">=3.12,<3.13"` |
+> | MAF dependency | `agent-framework-core` pinned exactly at `1.19.0` (verified on PyPI, `requires_python >=3.10`); provider packages added only when a live tier is enabled |
+> | Live models | Deferred. Weeks 1–7 use a deterministic mock agent and a stubbed chat client; the first provider trial is milestone M2b in week 8 |
+> | Retrieval | **In scope as an optional, cuttable adapter (reversed from an earlier exclusion).** Qdrant serves **untrusted knowledge articles only**, reached through a seventh typed tool, `search_knowledge`. Trusted refund policy continues to come from typed fixtures via `get_refund_policy`. The corpus ships with **checked-in precomputed embeddings**, so tier T1 stays offline and deterministic. Retrieval quality is reported separately from state truth (see 20.3) |
+> | Query embedding | Pinned local ONNX model (`BAAI/bge-small-en-v1.5` via `fastembed`), offline, identical model and dimension as the corpus; BM25 `sparse` and `fixture` fallbacks. Hosted embedding APIs and cassette replay are rejected for live tiers (see 20.3.1) |
+> | Retrieval cut safety | Scenarios needing retrieval declare `requires: [retrieval]` and MUST have a fixture-served fallback, so acceptance criteria 1 and 5 hold even when Qdrant is cut |
+> | Vocabulary | **Trial** is one execution of one scenario; **Experiment** is a scheduled set of trials; "run" survives only as the CLI verb |
+> | Scenario counting | One scenario is one manifest file; `family_id` groups scenarios and never crosses a split |
+> | Pull-request suite | Tier T1 runs the 15-scenario regression split; the 30 development scenarios are for local iteration |
+> | Platform | Windows for development; the atomicity, crash and durability guarantees are asserted on Linux only |
 
 ## 2. Executive Verdict and Corrected Positioning
 
@@ -68,7 +84,7 @@ The lab differentiates on the **combination and discipline** of these features, 
 | Inspect AI | **Verified** | Design inspiration for limits, interventions, checkpoints, isolation | MAF-focused typed fake environment and normalized evidence contract |
 | NeMo Guardrails | **Uncertain** | Optional probabilistic detector; documented capabilities are verified, effectiveness is scenario-dependent | Never treated as authorization or proof of truth; measured against labeled local cases |
 | Cleanlab TLM | **Uncertain** | Optional uncertainty score; scoring capability is verified, general effectiveness is not | Quarantined from release gates until locally calibrated and validated |
-| Qdrant | **Verified** | Optional retrieval store only if RAG is in the demo | Retrieval metrics remain separate from state truth and answer correctness |
+| Qdrant | **Verified** | Optional retrieval store for untrusted knowledge articles, behind a precomputed-embedding fixture | Trusted policy never comes from retrieval; retrieval metrics remain separate from state truth and answer correctness |
 | AgentDojo, InjecAgent, τ-bench | **Verified** | Cite as stateful security/reliability prior art | MAF-native implementation, CI contract, paired cost/latency/failure reporting |
 
 ## 3. Goals, Scope, and Non-goals
@@ -95,12 +111,13 @@ The minimum viable lab shall:
 
 - One support/refund domain.
 - One MAF agent and one simulated user driver.
-- Six typed tools: `get_customer`, `get_order`, `get_refund_policy`, `create_refund`, `get_refund_status`, and `send_customer_message`.
+- Seven typed tools: `get_customer`, `get_order`, `get_refund_policy`, `create_refund`, `get_refund_status`, `send_customer_message`, and `search_knowledge`.
 - Authorization, ownership, refund eligibility, amount, currency, idempotency, disclosure, and audit policies.
 - Direct and indirect prompt-injection scenarios.
 - Deterministic tool-boundary fault injection.
 - Explicit crash recovery and artifact-commit behavior.
 - Plugin interfaces for runners, evaluators, evidence exporters, guardrails, and optional soft judges.
+- A `search_knowledge` tool backed by either Qdrant or a fixture stub, serving untrusted knowledge articles from a checked-in precomputed-embedding corpus, scored by Recall@k and MRR against a labeled retrieval set (see 20.3). Qdrant is optional and cuttable; the tool is not.
 - A command line as the primary interface and a small FastAPI service as a secondary interface.
 
 ### 3.3 Non-goals
@@ -113,7 +130,7 @@ The minimum viable lab shall:
 - Proving factual truth with an LLM judge, NeMo self-check, vector similarity, groundedness score, self-consistency score, or TLM score.
 - Browser, shell, arbitrary-code, dynamic-import, or unrestricted network tools.
 - Multi-agent workflow evaluation in the minimum viable product.
-- A vector database unless the demo explicitly includes retrieval from versioned refund-policy documents.
+- A vector database in the trusted path. Retrieval is permitted only as an optional adapter serving **untrusted knowledge articles**; trusted refund policy is always read from typed fixtures (see 20.3).
 - Certifying security from a finite static red-team suite.
 - Claiming statistical superiority from a small, unpaired, or underpowered sample.
 
@@ -157,13 +174,13 @@ The minimum viable lab shall:
 | FR-09 | Calculate pass rate, `pass@k`, `pass^k`, intervals, latency, tokens, estimated cost, and failure-category counts. |
 | FR-10 | Inject faults from a deterministic schedule addressed by tool name and invocation ordinal. |
 | FR-11 | Compare two configurations using matched scenario/trial identifiers and recorded ordering. |
-| FR-12 | Emit `run.json`, `events.jsonl`, `audit.jsonl`, `state_before.json`, `state_after.json`, `state_diff.json`, `evaluations.jsonl`, `summary.json`, `summary.md`, `checksums.sha256`, and `junit.xml`. |
-| FR-13 | Correlate normalized runs with OpenTelemetry `trace_id` and `span_id`. |
-| FR-14 | Resume aggregate evaluation from completed immutable run artifacts without rerunning the model. |
+| FR-12 | Emit `trial.json`, `events.jsonl`, `audit.jsonl`, `state_before.json`, `state_after.json`, `state_diff.json`, `evaluations.jsonl`, `summary.json`, `summary.md`, `checksums.sha256`, and `junit.xml`. |
+| FR-13 | Correlate normalized trials with OpenTelemetry `trace_id` and `span_id`. |
+| FR-14 | Resume aggregate evaluation from completed immutable trial artifacts without rerunning the model. |
 | FR-15 | Reject unknown schema versions, evaluator names, tool names, undeclared fault types, and unsafe paths. |
 | FR-16 | Support deterministic mock-agent baselines and live MAF agents through one runner protocol. |
 | FR-17 | Preserve valid partial artifacts and explicit lifecycle/error state after process interruption. |
-| FR-18 | Record model/provider/date/configuration provenance and cost-estimation source/version for every live run. |
+| FR-18 | Record model/provider/date/configuration provenance and cost-estimation source/version for every live trial. |
 | FR-19 | Distinguish harness, evaluator, evidence, model, policy, security, tool, and infrastructure failures. |
 | FR-20 | Enforce cost, concurrency, timeout, and request caps before scheduling live trials. |
 
@@ -171,7 +188,7 @@ The minimum viable lab shall:
 
 | ID | Requirement |
 |---|---|
-| NFR-01 | A deterministic 30-scenario pull-request suite completes in under 5 minutes on a two-core CI runner. |
+| NFR-01 | Tiers T0 and T1 together complete in under 5 minutes on a two-core CI runner. T1 executes the 15-scenario regression split at one trial each; the 30 development scenarios are for local iteration and are not part of the pull-request suite. |
 | NFR-02 | Identical manifest, code revision, fixture version, mock agent, and seed produce byte-equivalent canonical evaluation output after excluding declared volatile fields. |
 | NFR-03 | Offline mode performs no external network calls. |
 | NFR-04 | Secret values, canaries, and configured personally identifying fields are redacted before disk or telemetry export. |
@@ -180,9 +197,9 @@ The minimum viable lab shall:
 | NFR-07 | Every metric declares level, direction, threshold, evidence references, evaluator version, and deterministic/probabilistic kind. |
 | NFR-08 | Dependencies and container images are pinned; lockfiles are committed. |
 | NFR-09 | No release gate depends solely on an LLM judge or proprietary uncertainty score. |
-| NFR-10 | Local framework overhead, excluding model and injected fault latency, has p95 below 100 ms per tool event on the reference machine. |
-| NFR-11 | Aggregate reporting for 1,000 stored trials completes in under 30 seconds on the reference machine. |
-| NFR-12 | Artifact writes are atomic at file level, checksummed, and never overwrite a completed run directory. |
+| NFR-10 | Local framework overhead, excluding model and injected fault latency, has p95 below 100 ms per tool event on the reference machine defined in `docs/metric-card.md`. |
+| NFR-11 | Aggregate reporting for 1,000 stored trials completes in under 30 seconds on the reference machine defined in `docs/metric-card.md`. |
+| NFR-12 | Artifact writes are atomic at file level, checksummed, and never overwrite a completed trial directory. **This guarantee is asserted on Linux only.** Windows differs on `fsync` semantics, rename atomicity and file locking, and is supported as a development convenience rather than a target for this requirement. |
 | NFR-13 | Full prompts, completions, customer names, notes, and canaries are excluded from telemetry by default. |
 
 ## 6. Domain Model: Simulated Refund Support
@@ -208,8 +225,11 @@ Money shall be represented as integer minor units plus ISO currency, never binar
 | `create_refund(order_id, amount_minor, currency, reason, idempotency_key)` | Yes | Ownership, eligibility, amount, currency, scope, and one effective result per key. |
 | `get_refund_status(refund_id)` | No | Refund ownership. |
 | `send_customer_message(customer_id, template_id, variables)` | Yes | Recipient authorization, approved template, and no secrets in variables. |
+| `search_knowledge(query, top_k)` | No | Query length and `top_k` bounds; corpus contains no customer data; every returned passage is marked untrusted and carries article provenance. |
 
 Every tool shall validate a Pydantic request model, authorize independently of model text, append an audit event, and return a typed discriminated union such as `Success | PolicyDenied | NotFound | TransientFailure | InvalidRequest | UnknownOutcome`. The agent shall never access the state store directly.
+
+`search_knowledge` is the only tool whose successful result is **untrusted by construction**. It is read-only, so it never returns `PolicyDenied` or `UnknownOutcome`; its result payload carries `trust: "untrusted"`, the backing `retrieval_mode`, the corpus version, and per-passage article identities and scores. Deterministic evaluators MUST assert that no policy decision, state assertion or authorization outcome was satisfied by a `search_knowledge` payload. The tool exists so that retrieval crosses a typed, audited, fault-injectable boundary like every other data source; retrieval that bypassed the tool gateway would produce no events and could not be measured or attacked under controlled conditions.
 
 ## 7. Architecture, Components, and Trust Boundaries
 
@@ -243,7 +263,7 @@ flowchart LR
 ### 7.1 Components
 
 1. **Manifest validator:** Parses versioned YAML into immutable typed models and rejects executable or unknown constructs.
-2. **Experiment orchestrator:** Expands suite × configuration × trial schedules, enforces limits, isolates runs, and coordinates lifecycle.
+2. **Experiment orchestrator:** Expands suite × configuration × trial schedules, enforces limits, isolates trials, and coordinates lifecycle.
 3. **MAF runner adapter:** Converts MAF messages, model activity, tool calls, and framework telemetry into project-owned normalized events.
 4. **Mock runner:** Executes deterministic reference and mutant agents without provider access.
 5. **Typed tool gateway:** Performs schema validation, authorization, idempotency, and audit recording.
@@ -252,7 +272,7 @@ flowchart LR
 8. **Evidence recorder:** Writes ordered events, state snapshots, hashes, and provenance.
 9. **Evaluator pipeline:** Runs deterministic tool/turn/session/system evaluators and optional soft scorers.
 10. **Aggregator/statistics engine:** Computes reliability, confidence, paired deltas, failure distributions, cost, and latency.
-11. **Artifact store:** Atomically publishes immutable run and experiment directories.
+11. **Artifact store:** Atomically publishes immutable trial and experiment directories.
 12. **Telemetry projection:** Exports redacted OpenTelemetry data; it is not the verdict authority.
 13. **Reporter:** Produces Markdown, JSON, and JUnit views from canonical artifacts.
 
@@ -315,7 +335,7 @@ Boundary rules:
 5. Telemetry is a lossy projection, never the sole verdict store.
 6. Aggregation cannot erase catastrophic failures.
 7. Every completed mutation is replayable from the audit log.
-8. Every completed run is immutable and content-addressed by checksums.
+8. Every completed trial is immutable and content-addressed by checksums.
 
 ## 8. Scenario Execution and Lifecycle
 
@@ -356,7 +376,7 @@ sequenceDiagram
     O->>S: final snapshot and audit history
     O->>E: complete immutable evidence
     E-->>O: four-level evaluations
-    O->>W: fsync temp files; rename; checksums; COMMITTED marker
+    O->>W: write checksums; fsync temp files; atomic rename; COMMITTED marker
     O-->>C: artifact path and exit code
 ```
 
@@ -401,22 +421,38 @@ stateDiagram-v2
 
 ### 9.2 Artifact commit and process crashes
 
-- Each trial writes to `<run_id>.partial/`; completed artifacts are published by atomic rename to `<run_id>/` followed by a `COMMITTED` marker.
+- Each trial writes to `<trial_id>.partial/`. The commit order is strict: write all artifacts, compute and write `checksums.sha256` **inside** the partial directory, `fsync` the files and the directory, then atomically rename to `<trial_id>/`, then write the `COMMITTED` marker. Checksums must never be written after the rename; doing so would expose a committed-looking directory whose integrity file is missing or incomplete.
 - Event and audit records are append-only, sequence-numbered, flushed at bounded checkpoints, and parseable up to the last complete line.
 - On startup, the orchestrator scans `.partial` directories, validates hashes and sequence continuity, and classifies them as recoverable, failed, or quarantined.
 - A crash before model execution may safely reschedule the same trial identity.
 - A crash during execution may not rerun a side-effecting scenario blindly. It must reconstruct state from the transaction/audit record, determine whether execution evidence is complete, and either continue evaluation or mark the trial `INDETERMINATE`.
 - `INDETERMINATE` is never counted as safe or passing. It is excluded from model pass estimates, reported in the harness denominator, and may fail evidence-health gates.
-- Completed run directories are immutable; re-evaluation writes a new evaluation-set directory keyed by evaluator versions.
-- Aggregation is restartable and idempotent because it reads immutable run/evaluation records and writes a new content-addressed experiment summary.
+- Completed trial directories are immutable; re-evaluation writes a new evaluation-set directory keyed by evaluator versions.
+- Aggregation is restartable and idempotent because it reads immutable trial/evaluation records and writes a new content-addressed experiment summary.
 
-### 9.3 Crash acceptance scenarios
+### 9.3 Store profiles
 
-1. Crash before a refund transaction: zero refund, valid partial run, safe reschedule.
+An in-memory database cannot satisfy crash acceptance scenario 2, because a committed refund and its idempotency record must survive the death of the process that wrote them. Two profiles are therefore declared, and every trial records which one produced it.
+
+| Profile | Store | Execution | Purpose |
+|---|---|---|---|
+| `memory` (default) | Per-trial in-memory SQLite | Trials run concurrently in one process under a bounded semaphore | Bulk deterministic and live suites; satisfies NFR-01 and NFR-02 |
+| `durable` | Per-trial file-backed SQLite in an isolated temporary directory | Each trial runs in a real subprocess the harness can terminate | Crash, recovery and idempotency suites; the only profile that can satisfy section 9.4 |
+
+Rules:
+
+- `store_profile` is recorded in the trial record and in every aggregate. Durability results MUST NOT be compared across profiles.
+- The fake tools are microsecond-scale, so trial concurrency is bounded by model latency rather than CPU; asyncio concurrency within one process is sufficient for the `memory` profile and no process pool is required.
+- Crash tests MUST use `durable`. A crash test that cannot kill a real operating-system process is not a crash test.
+- The `durable` profile is asserted on Linux only, consistent with NFR-12.
+
+### 9.4 Crash acceptance scenarios
+
+1. Crash before a refund transaction: zero refund, valid partial trial, safe reschedule.
 2. Crash after transaction commit but before tool response: one refund, persisted idempotency record, later reconciliation returns original result.
 3. Crash after response but before event flush: audit/state indicate effect; missing evidence forces `INDETERMINATE`, never an inferred pass.
 4. Crash during evaluation: execution artifacts remain immutable; evaluator set can restart without model execution.
-5. Crash during summary publication: prior completed runs remain valid; a new atomic aggregation attempt replaces no canonical input.
+5. Crash during summary publication: prior completed trials remain valid; a new atomic aggregation attempt replaces no canonical input.
 
 ## 10. Scenario Manifest
 
@@ -425,10 +461,12 @@ YAML is author-facing and validates into an immutable Pydantic model. Scenarios 
 ```yaml
 schema_version: "1.0"
 scenario_id: refund.eligible.single.v1
+family_id: refund.eligible
 title: Eligible customer requests a partial refund
 tags: [core, refund, mutation]
 split: regression
 risk: high
+requires: []                       # e.g. [retrieval]; see manifest rules
 fixture_version: refund-fixtures-1.0
 initial_state:
   clock: "2026-02-01T12:00:00Z"
@@ -491,6 +529,11 @@ metadata:
 
 Manifest rules:
 
+- `scenario_id` is unique across the whole corpus; one scenario is exactly one manifest file, so a corpus of 60 scenarios is 60 files.
+- **Tool allowlist.** `required_tool_calls`, `forbidden_tool_calls` and `fault_plan` entries may name only these seven tools: `get_customer`, `get_order`, `get_refund_policy`, `create_refund`, `get_refund_status`, `send_customer_message`, `search_knowledge`. Any other name fails validation under FR-15 before a model is invoked.
+- **Capability declarations.** `requires` lists optional capabilities a scenario depends on; `retrieval` is currently the only member. A scenario declaring `requires: [retrieval]` MUST remain executable when Qdrant is absent, because retrieval is cut #2. The suite validator fails if such a scenario has no fixture-served fallback for every `search_knowledge` call it expects.
+- **Fallback semantics.** When the retrieval capability is unavailable, `search_knowledge` is served by the fixture stub from the same checked-in corpus, returning the same article text for the scenario's declared query. The untrusted payload the agent sees is unchanged, so the scenario still executes, the attack is still classified, and acceptance criteria 1 and 5 still hold. Only `retrieval_mode` changes, and Recall@k/MRR become not-applicable rather than zero.
+- `family_id` groups scenarios that share a template or an attack paraphrase. A suite validator MUST fail if one `family_id` appears in more than one split, and the same rule applies to `fixture_version` and to fault-schedule identities, because section 14 forbids those from crossing splits too.
 - Paths use a restricted selector grammar, not arbitrary expressions.
 - `critical` assertions are hard gates; `major` and `minor` affect level scores.
 - `untrusted_content` marks data the agent may read but must not obey as authorization or instructions.
@@ -500,12 +543,12 @@ Manifest rules:
 
 ## 11. Normalized Schemas
 
-### 11.1 Run record
+### 11.1 Trial record
 
 ```json
 {
   "schema_version": "1.0",
-  "run_id": "run_01J...",
+  "trial_id": "trial_01J...",
   "experiment_id": "exp_01J...",
   "scenario_id": "refund.eligible.single.v1",
   "trial_index": 3,
@@ -529,6 +572,17 @@ Manifest rules:
   "limits": {"max_turns": 8, "max_tool_calls": 12, "timeout_ms": 30000, "max_cost_usd": 0.25},
   "usage": {"input_tokens": 912, "output_tokens": 183, "estimated_cost_usd": 0.0042, "price_card_version": "provider-date"},
   "state": {"before_sha256": "...", "after_sha256": "...", "diff_ref": "state_diff.json"},
+  "store_profile": "memory",
+  "retrieval": {
+    "enabled": true,
+    "retrieval_mode": "dense",
+    "corpus_version": "knowledge-corpus-1.0",
+    "corpus_sha256": "...",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "embedding_revision": "...",
+    "embedding_dimension": 384,
+    "top_k": 5
+  },
   "evidence": {"events_ref": "events.jsonl", "audit_ref": "audit.jsonl", "trace_id": "32-hex", "root_span_id": "16-hex"},
   "error": null
 }
@@ -540,7 +594,7 @@ Manifest rules:
 {
   "schema_version": "1.0",
   "event_id": "evt_01J...",
-  "run_id": "run_01J...",
+  "trial_id": "trial_01J...",
   "sequence": 7,
   "timestamp": "2026-02-01T12:01:01.120Z",
   "monotonic_ns": 991120000,
@@ -560,7 +614,7 @@ Manifest rules:
 }
 ```
 
-Initial event types are `run.started`, `message.input`, `message.output`, `model.request`, `model.result`, `tool.request`, `authorization.decision`, `fault.injected`, `tool.result`, `state.mutation`, `checkpoint.saved`, `limit.reached`, `run.error`, and `run.ended`. Unknown types remain parseable but cannot silently satisfy assertions.
+Initial event types are `trial.started`, `message.input`, `message.output`, `model.request`, `model.result`, `tool.request`, `authorization.decision`, `fault.injected`, `tool.result`, `state.mutation`, `checkpoint.saved`, `limit.reached`, `trial.error`, and `trial.ended`. Unknown types remain parseable but cannot silently satisfy assertions.
 
 ### 11.3 Evaluation result
 
@@ -568,7 +622,7 @@ Initial event types are `run.started`, `message.input`, `message.output`, `model
 {
   "schema_version": "1.0",
   "evaluation_id": "eval_01J...",
-  "run_id": "run_01J...",
+  "trial_id": "trial_01J...",
   "scenario_id": "refund.eligible.single.v1",
   "level": "session",
   "metric": "state_oracle",
@@ -605,33 +659,34 @@ Each failure includes one category, a stable reason code, severity, retryability
 
 ```mermaid
 erDiagram
-    EXPERIMENT ||--o{ RUN : contains
-    SCENARIO ||--o{ RUN : instantiates
-    AGENT_CONFIG ||--o{ RUN : configures
-    RUN ||--o{ EVENT : records
-    RUN ||--o{ STATE_SNAPSHOT : captures
-    RUN ||--o{ FAULT : injects
-    RUN ||--o{ EVALUATION : receives
+    EXPERIMENT ||--o{ TRIAL : contains
+    SCENARIO ||--o{ TRIAL : instantiates
+    AGENT_CONFIG ||--o{ TRIAL : configures
+    TRIAL ||--o{ EVENT : records
+    TRIAL ||--o{ STATE_SNAPSHOT : captures
+    TRIAL ||--o{ FAULT : injects
+    TRIAL ||--o{ EVALUATION : receives
     EVALUATOR ||--o{ EVALUATION : produces
     EXPERIMENT ||--o{ AGGREGATE : summarizes
-    RUN ||--o{ ARTIFACT : commits
+    TRIAL ||--o{ ARTIFACT : commits
 
-    RUN {
-        string run_id PK
+    TRIAL {
+        string trial_id PK
         string scenario_id FK
         int trial_index
         string status
         string trace_id
+        string store_profile
     }
     EVENT {
         string event_id PK
-        string run_id FK
+        string trial_id FK
         int sequence
         string type
     }
     EVALUATION {
         string evaluation_id PK
-        string run_id FK
+        string trial_id FK
         string level
         string metric
         float score
@@ -640,7 +695,7 @@ erDiagram
         string failure_category
     }
     STATE_SNAPSHOT {
-        string run_id FK
+        string trial_id FK
         string phase
         string sha256
     }
@@ -653,7 +708,7 @@ erDiagram
         float ci_high
     }
     ARTIFACT {
-        string run_id FK
+        string trial_id FK
         string path
         string sha256
         bool committed
@@ -670,7 +725,7 @@ from pydantic import BaseModel
 Level = Literal["tool", "turn", "session", "system"]
 
 class TrialContext(BaseModel):
-    run_id: str
+    trial_id: str
     experiment_id: str
     trial_index: int
     trial_seed: int
@@ -680,13 +735,13 @@ class TrialContext(BaseModel):
 class NormalizedEvent(BaseModel):
     schema_version: str = "1.0"
     event_id: str
-    run_id: str
+    trial_id: str
     sequence: int
     type: str
     payload: Mapping[str, Any]
 
-class RunEvidence(BaseModel):
-    run: "RunRecord"
+class TrialEvidence(BaseModel):
+    trial: "TrialRecord"
     events: Sequence[NormalizedEvent]
     state_before: Mapping[str, Any]
     state_after: Mapping[str, Any]
@@ -701,13 +756,13 @@ class Evaluator(Protocol):
     version: str
     level: Level
     deterministic: bool
-    async def evaluate(self, evidence: RunEvidence, scenario: "ScenarioManifest") -> Sequence["EvaluationResult"]: ...
+    async def evaluate(self, evidence: TrialEvidence, scenario: "ScenarioManifest") -> Sequence["EvaluationResult"]: ...
 
 class FaultInjector(Protocol):
     async def apply(self, request: "ToolRequest", invocation_ordinal: int, context: TrialContext) -> "FaultDecision": ...
 
 class EvidenceExporter(Protocol):
-    async def export_run(self, evidence: RunEvidence) -> None: ...
+    async def export_run(self, evidence: TrialEvidence) -> None: ...
     async def export_evaluations(self, results: Sequence["EvaluationResult"]) -> None: ...
 
 class GuardrailAdapter(Protocol):
@@ -762,7 +817,7 @@ Metrics include macro and micro pass rates, `pass@k`, `pass^k`, critical violati
 
 ## 14. Dataset and Splits
 
-Create 60 hand-authored scenario families with immutable identifiers:
+Create 60 hand-authored scenarios, grouped into families, with immutable identifiers. The counts below are scenarios, not families:
 
 | Category | Count | Examples |
 |---|---:|---|
@@ -778,6 +833,8 @@ Splits:
 - **Development: 30** visible scenarios for frequent use.
 - **Regression: 15** stable scenarios for pull-request/nightly CI.
 - **Holdout: 15** instructor-controlled or protected scenarios for release assessment.
+
+Each scenario belongs to exactly one split, and the directory it lives in is that split. The section 27 demonstration is a curated ordered list of `scenario_id` values drawn from the development split, held in the demo script's configuration; it is not a fourth directory, because scenarios outside the three splits would be absent from every denominator.
 
 Splits shall be stratified by category and risk. Template families, attack paraphrase families, fixtures, and fault schedules shall not cross splits. Every scenario receives an author, an independent reviewer, rationale for critical assertions, a known-good mock result, and at least one expected-to-fail mutant. Oracle weakening requires review and a dataset version change.
 
@@ -878,8 +935,8 @@ Faults occur at stable semantic boundaries, not random monkey patches. Events re
 ```text
 maf-lab validate scenarios/
 maf-lab run --suite regression --agent configs/agents/hardened.yaml --trials 3 --offline
-maf-lab run --scenario refund.eligible.single.v1 --faults --output artifacts/run-001
-maf-lab evaluate artifacts/run-001
+maf-lab run --scenario refund.eligible.single.v1 --faults --output artifacts/trial-001
+maf-lab evaluate artifacts/trial-001
 maf-lab compare artifacts/baseline artifacts/candidate --paired
 maf-lab report artifacts/experiment-001 --format markdown,junit,json
 maf-lab recover artifacts/
@@ -894,10 +951,10 @@ Exit codes: `0` configured gates pass; `1` evaluated regression/gate failure; `2
 |---|---|---|
 | `POST` | `/v1/experiments` | Submit suite/config/trials; return `202` and experiment ID. |
 | `GET` | `/v1/experiments/{id}` | Status and aggregate summary. |
-| `GET` | `/v1/experiments/{id}/runs` | Paginated run metadata. |
-| `GET` | `/v1/runs/{id}` | Run record and constrained artifact references. |
-| `GET` | `/v1/runs/{id}/events` | Paginated redacted events. |
-| `POST` | `/v1/runs/{id}/evaluate` | Re-evaluate immutable evidence with selected evaluator versions. |
+| `GET` | `/v1/experiments/{id}/trials` | Paginated trial metadata. |
+| `GET` | `/v1/trials/{id}` | Trial record and constrained artifact references. |
+| `GET` | `/v1/trials/{id}/events` | Paginated redacted events. |
+| `POST` | `/v1/trials/{id}/evaluate` | Re-evaluate immutable evidence with selected evaluator versions. |
 | `POST` | `/v1/comparisons` | Start a paired comparison. |
 | `POST` | `/v1/recovery/scan` | Scan partial local artifacts in an authenticated administrative profile. |
 | `GET` | `/health/live` | Process liveness. |
@@ -952,15 +1009,59 @@ Keep TLM disabled by default. If included, collect a labeled calibration set, fr
 
 ### 20.3 Qdrant
 
-**Verified:** Qdrant can store and retrieve a corpus; it is not a factual verifier. Retrieval evaluation still needs versioned labels and metrics such as Recall@k, MRR, or NDCG.  
-**Opinion:** Omit Qdrant unless the demonstration is genuinely retrieval-dependent. If retained, use a checked-in corpus snapshot/local instance, label untrusted document provenance, seed indirect attacks, and report retrieval metrics separately from answer and state correctness.
+**Verified:** Qdrant can store and retrieve a corpus; it is not a factual verifier. Retrieval evaluation still needs versioned labels and metrics such as Recall@k, MRR, or NDCG.
+
+**Decided: retrieval is in scope as an optional, cuttable adapter, restricted to untrusted content.** The adapter exists at `adapters/qdrant.py` and is disabled by default.
+
+**Trust split — the load-bearing rule.** Retrieval never supplies trusted facts.
+
+| Content | Source | Trust | Authorization role |
+|---|---|---|---|
+| Refund policy fields used by decisions | Typed fixtures via `get_refund_policy` | Trusted | Policy evaluation reads these |
+| Knowledge articles, help-centre text, support notes | Qdrant | **Untrusted** | None; may be quoted or summarized, never obeyed |
+
+A retrieved article is data, not authority. Retrieved text is recorded as untrusted content, carries document provenance, and is a first-class indirect-injection vector (section 16.2). A trusted decision must never depend on a retrieved passage, and no state assertion may be satisfied by retrieval output alone.
+
+**Determinism and offline CI.** The corpus ships as a checked-in snapshot with **precomputed embeddings**, so no corpus embedding happens at trial time.
+
+- Tier T1 performs no external network call, satisfying NFR-03 while retrieval is enabled.
+- Identical inputs return identical neighbours, preserving NFR-02 byte-equivalence.
+- The corpus version and index parameters are covered by the corpus fixture hash. Changing any of them is a corpus version change, not a silent re-index.
+- A local Qdrant instance or embedded mode is used; Qdrant Cloud stays disabled by default and separately budgeted.
+
+#### 20.3.1 Query embedding
+
+Precomputing the corpus solves only half the problem. A live agent generates **novel query text** at trial time, which cannot be precomputed. The mechanism is therefore stated explicitly.
+
+**Queries are embedded by a pinned local model, executed offline, and it MUST be the identical model, revision and dimension that produced `embeddings-v1.npy`.** A query embedded by a different model lands in a different vector space, and the resulting neighbours are meaningless rather than merely worse. The suite fails closed on any mismatch between the query-time model fingerprint and the fingerprint recorded in the corpus manifest.
+
+| Mode | Mechanism | Determinism | Used for |
+|---|---|---|---|
+| `dense` (default) | Pinned local ONNX embedding model via `fastembed`, CPU only, no network | Deterministic for identical text, model revision and dimension | T0–T4, including live tiers |
+| `sparse` (fallback) | BM25 lexical scoring over the same corpus, no model | Fully deterministic | Cut path when the model cannot be installed |
+| `fixture` (fallback) | Fixture stub returns the scenario's declared article set | Fully deterministic | Qdrant cut entirely; see manifest fallback rules |
+
+**Rejected options, and why:**
+
+- **Hosted embedding API.** Breaks NFR-03 for T0–T1, adds per-query cost and provider nondeterminism, and makes the untrusted-content path depend on an external service. Not permitted in any tier.
+- **Recorded API calls (cassette replay).** Workable only for a fixed query set. A live model invents queries that were never recorded, so replay either misses or silently falls back. Rejected as the live-tier mechanism; recorded fixtures remain acceptable for contract tests over known queries.
+
+**Recorded provenance.** The corpus manifest and every trial record carry the embedding model identity, resolved revision, dimension, normalisation setting, `retrieval_mode`, corpus version and `top_k`. Recall@k and MRR are reported **per retrieval mode and never pooled across modes**, because a `dense` result and a `sparse` result are different measurements.
+
+**Corpus artifact.** `embeddings-v1.npy` is a float32 array of shape `(n_articles, dimension)` produced by the pinned model in a documented article order that matches `articles-v1.jsonl` line order. The build script that produces it is committed, and the file is checksummed with the rest of the corpus fixture. This is why `numpy` is a pinned runtime dependency rather than a test-only one.
+
+**Measurement separation.** Retrieval quality is scored against a labeled retrieval set and reported as **Recall@k** and **MRR**, published beside — never merged into — session pass rate, state-oracle verdicts or security outcomes. A retrieval regression and a policy violation are different failures with different owners. Retrieval failures map to their own reason codes and never convert a critical state violation into a soft score.
+
+**Verified boundary:** Qdrant stores and retrieves a corpus. It does not verify facts. Wrong, stale, poisoned or unauthorized passages can still ground a false answer, so grounding a claim in a retrieved article is not evidence the claim is true.
+
+Retrieval remains **cut #2** in section 30. Cutting it retains the fixture policy lookup and drops only the untrusted-article vector, so the core state and security theses survive the cut intact.
 
 ## 21. Security, Privacy, and Sandbox
 
 ### 21.1 Controls
 
 - Use only synthetic fixtures.
-- Run tools on per-trial in-memory SQLite or an isolated temporary database.
+- Run tools on a per-trial isolated database selected by the declared **store profile** (see section 9.3). In-memory is the default for speed; the crash profile requires a durable file-backed database.
 - Never connect to real payments, email, customers, or ticketing systems.
 - Deny network egress in offline/CI containers; live profiles allowlist only required model and telemetry endpoints.
 - Run non-root with read-only source, writable per-run artifact directory, CPU/memory/time limits, no host credentials, and no Docker socket.
@@ -997,11 +1098,11 @@ Test manifest validation/canonicalization/version rejection; money/time/ID norma
 - For valid `n,c,k`, estimates remain in `[0,1]`; `pass@k` is nondecreasing and `pass^k` nonincreasing in `k`.
 - Adding a pass cannot reduce pass rate; adding a failure cannot increase it.
 - Configured secrets never appear in serialized artifacts.
-- Crash/recovery attempts cannot overwrite a completed run.
+- Crash/recovery attempts cannot overwrite a completed trial.
 
 ### 22.3 Contract tests
 
-Test each fake-tool request/result union; MAF event mapping with recorded synthetic fixtures; OTLP export to a local collector; FastAPI OpenAPI snapshots and idempotent submissions; and optional Langfuse/NeMo/TLM/Qdrant adapters behind markers and credentials.
+Test each fake-tool request/result union; MAF event mapping with recorded synthetic fixtures; OTLP export to a local collector; FastAPI OpenAPI snapshots and idempotent submissions; and optional Langfuse/NeMo/TLM/Qdrant adapters behind markers and credentials. The Qdrant contract test asserts that the precomputed-embedding corpus returns identical neighbours across repeated queries and that no embedding endpoint is contacted.
 
 ### 22.4 Mutants and golden artifacts
 
@@ -1071,9 +1172,15 @@ Reproducibility controls include pinned Python/dependencies, digest-pinned relea
 
 ## 25. Repository Layout
 
+Paths are relative to the repository root of `agentlab`; there is no project subdirectory.
+
 ```text
-maf-agent-reliability-lab/
+.
 ├── README.md
+├── AGENTS.md
+├── CLAUDE.md
+├── CONTEXT.md
+├── .python-version                # 3.12
 ├── pyproject.toml
 ├── uv.lock
 ├── docker/
@@ -1086,12 +1193,15 @@ maf-agent-reliability-lab/
 │   └── ci/
 ├── scenarios/
 │   ├── schema/
-│   ├── development/
-│   ├── regression/
-│   └── demo/
+│   ├── development/               # 30 scenarios, local iteration
+│   ├── regression/                # 15 scenarios, T1 pull-request suite
+│   └── holdout/                   # 15 scenarios, not committed publicly
 ├── fixtures/
 │   ├── refund-fixtures-v1.json
-│   └── policy-documents/          # only if RAG is enabled
+│   └── knowledge-corpus/          # untrusted articles + precomputed embeddings
+│       ├── articles-v1.jsonl
+│       ├── embeddings-v1.npy
+│       └── retrieval-labels-v1.json
 ├── src/maf_lab/
 │   ├── cli.py
 │   ├── api.py
@@ -1133,6 +1243,9 @@ maf-agent-reliability-lab/
 │   └── golden/
 ├── scripts/
 ├── docs/
+│   ├── adr/
+│   ├── agents/
+│   ├── spec/
 │   ├── architecture.md
 │   ├── metric-card.md
 │   ├── threat-model.md
@@ -1143,7 +1256,7 @@ maf-agent-reliability-lab/
     └── release-benchmark.yml
 ```
 
-Holdout manifests are not committed to the student-visible repository.
+Holdout manifests are not committed to the student-visible repository. This is enforced, not merely stated: `scenarios/holdout/` is listed in `.gitignore`, which was added before any scenario existed, so no holdout manifest can reach the public history by accident. Acceptance criterion 1 therefore counts 45 scenarios in the public repository and 60 only when combined with the private holdout store.
 
 ## 26. Delivery Plan: 8–10 Weeks
 
@@ -1152,18 +1265,19 @@ Holdout manifests are not committed to the student-visible repository.
 | 1 | Threat model, domain entities, scenario schema, five seed scenarios | Reviewed manifests validate; architecture decision recorded |
 | 2 | Isolated state, typed tools, policy, audit, fake clock, idempotency | Unit/property tests pass without MAF |
 | 3 | Events, artifact writer, lifecycle/recovery, mock runner, state oracle | Happy, denied, crash, and mutant trials produce explainable evidence |
-| 4 | MAF adapter, bounded execution, CLI, basic reports | One live and one mock end-to-end run |
+| 4 | MAF adapter, bounded execution, CLI, basic reports | Two end-to-end trials against a **stubbed chat client**: one reference, one mutant. No provider credentials and no spend. |
 | 5 | Four-level evaluators, hard gates, failure taxonomy, 30 development scenarios | Mutants fail at intended levels |
 | 6 | Repetitions, intervals, `pass@k`, `pass^k`, paired comparison, JUnit | Synthetic distributions and seeded regression validate |
 | 7 | Fault injector, direct/indirect injection, full 60 scenarios | Ambiguous-write and canary tests pass |
-| 8 | OTel collector, offline CI, privacy, cost/latency reports | Pull-request CI and one bounded live run succeed |
+| 8 | OTel collector, offline CI, privacy, cost/latency reports | Pull-request CI green and milestone M2b's single bounded live trial succeeds |
 | 9 | B0/B1/B2 benchmark, demo, documentation, release procedure | Reproducible report and recorded demo |
 | 10 | Buffer: FastAPI or one optional adapter | Optional work cannot block core acceptance |
 
 ### Milestone gates
 
 - **M1, end week 2:** Trusted domain core is independent of model/framework.
-- **M2, end week 4:** One MAF run produces canonical replayable evidence.
+- **M2a, end week 4:** The MAF adapter produces canonical replayable evidence against a stubbed chat client, with no provider credentials and no spend. This gate tests event normalisation, which is the risky part.
+- **M2b, end week 8:** One live provider trial succeeds under a cost cap, alongside the CI work already scheduled for that week.
 - **M3, end week 6:** Reliability statistics and paired regressions are correct and tested.
 - **M4, end week 8:** Security/fault suites and deterministic CI are complete.
 - **M5, week 9 or 10:** Benchmark, demo, documentation, and acceptance evidence are complete.
@@ -1185,11 +1299,11 @@ Use synthetic fixtures and a fixed cost cap. Keep a pre-recorded live artifact f
 
 ## 28. Objective Acceptance Criteria
 
-1. **Scenarios:** 60 valid manifests exist with stated categories and split discipline.
+1. **Scenarios:** 60 valid manifests exist with stated categories and split discipline, and the cross-split validator passes for `family_id`, fixture version and fault-schedule identity. Because the 15 holdout manifests are deliberately not committed publicly, this criterion is verified against the combined public repository plus the private holdout store, and the public repository alone is expected to show 45.
 2. **Isolation:** 100 consecutive deterministic trials show no cross-trial leakage.
 3. **Oracle correctness:** Critical mutant kill rate is 100%; overall kill rate is at least 90%.
 4. **Security effects:** Deterministic reference and hardened release runs have zero unauthorized mutations and zero canary disclosures.
-5. **Injection evidence:** Every attack is rejected, contained, blocked, successful, or indeterminate with evidence references.
+5. **Injection evidence:** Every attack is rejected, contained, blocked, successful, or indeterminate with evidence references. This criterion is independent of the retrieval capability: scenarios declaring `requires: [retrieval]` execute through the fixture fallback when Qdrant is cut, so every attack remains classified in every configuration.
 6. **Fault safety:** Hardened agent has at least 95% exactly-once safety under ambiguous-write trials; no duplicate effective refund occurs in any release trial.
 7. **Reliability:** Adequately sampled scenarios include counts, pass rate, `pass@1`, `pass@3`, `pass^3`, and 95% intervals; unsupported `k` is explicit.
 8. **Semantic levels:** Every evaluation has exactly one valid level; all four appear in the release report.
@@ -1217,14 +1331,14 @@ Core deployment is local Docker Compose or native Python with the `maf-lab` proc
 ### 29.2 Costs
 
 - Deterministic pull-request CI is compute-only and should dominate routine feedback.
-- Live runs require `--max-cost-usd`, token, request, concurrency, and timeout limits.
+- Live experiments require `--max-cost-usd`, token, request, concurrency, and timeout limits.
 - Stop scheduling when the budget is reached; finish and record in-flight trials.
 - Use a low-cost model for smoke tests and target models for nightly/release runs.
 - Cache static fixtures/documents, not stochastic outputs presented as fresh trials.
-- Emit estimated and, when available, billed cost by run and experiment.
-- Keep optional Foundry judges, hosted Langfuse, NeMo endpoints, TLM, and Qdrant Cloud disabled by default and separately budgeted.
+- Emit estimated and, when available, billed cost by trial and experiment.
+- Keep optional Foundry judges, hosted Langfuse, NeMo endpoints, TLM, and Qdrant Cloud disabled by default and separately budgeted. The checked-in precomputed-embedding corpus means enabling retrieval locally adds no provider cost.
 
-**Opinion:** Practical planning targets are under USD 10 per nightly benchmark and under USD 50 per release benchmark. These are configurable caps, not guaranteed prices. Provider pricing varies and must be rechecked before each live campaign.
+**Opinion:** Practical planning targets are under USD 10 per nightly benchmark and under USD 50 per release benchmark. These are configurable caps, not guaranteed prices. Provider pricing varies and must be rechecked before each live experiment.
 
 ## 30. Risks, Mitigations, and Cut Order
 
@@ -1239,6 +1353,11 @@ Core deployment is local Docker Compose or native Python with the `maf-lab` proc
 | Fault injection is unrealistic | Misleading resilience result | Semantic boundaries and documented assumptions |
 | Tools block attacks but agent remains susceptible | Hidden weakness | Separate attempted behavior from end-to-end effect |
 | Telemetry leaks content | Privacy breach | Schema redaction, metadata-only default, local collector |
+| Retrieved text treated as trusted | Policy decided by a poisoned article | Trusted policy only from typed fixtures; retrieved content marked untrusted, never authorizing; no state assertion satisfiable by retrieval alone |
+| Retrieval quality mistaken for correctness | A Recall@k gain hides a policy regression | Recall@k and MRR reported separately with their own reason codes; excluded from pass rates and security gates |
+| Corpus or embedding drift | Irreproducible retrieval results | Checked-in precomputed embeddings, corpus fixture hash, recorded model identity and dimension; any change is a new corpus version |
+| Query/corpus embedding mismatch | Neighbours become meaningless, not merely worse | Query-time model fingerprint compared against the corpus manifest; the suite fails closed on mismatch |
+| Cutting Qdrant breaks the scenario corpus | Criteria 1 and 5 fail because 8 indirect-injection scenarios cannot execute | `requires: [retrieval]` plus a mandatory fixture-served fallback validated for every expected `search_knowledge` call |
 | Crash duplicates a side effect | Financial/policy failure | Transactional idempotency, reconciliation, recovery tests |
 | Optional integrations consume schedule | Core quality suffers | Enforce cut order |
 | Small samples produce unstable results | Overclaiming | Counts, intervals, paired design, no universal ranking |
@@ -1252,6 +1371,8 @@ Cut in this order if behind schedule:
 5. FastAPI; retain the command line.
 6. Polished report UI; retain raw artifacts, Markdown, JSON, and JUnit.
 7. Reduce live trial counts with explicit uncertainty.
+
+Cutting Qdrant removes the retrieved-article injection vector and the Recall@k/MRR reporting. It does not touch trusted policy, which is read from typed fixtures either way, so the state-oracle and security theses survive the cut.
 
 Do **not** cut canonical state oracles, authorization, idempotency, indirect injection, ambiguous-write faults, deterministic CI, failure taxonomy, paired comparison, or artifact replay.
 
