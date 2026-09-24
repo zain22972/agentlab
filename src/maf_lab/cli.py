@@ -1,8 +1,18 @@
 """Command-line interface for MAF Agent Reliability Lab."""
 
+from pathlib import Path
+
 import click
+import yaml
+from pydantic import ValidationError
 
 from maf_lab import __version__
+from maf_lab.runner.orchestrator import execute_trial
+from maf_lab.schemas.scenario import ScenarioManifest
+
+SUPPORTED_AGENTS = ("b0",)
+"""The only agent this CLI can drive today. B1/B2/B3 (spec section 23) arrive
+with the framework adapter (#12); this ticket implements B0 only."""
 
 
 @click.group()
@@ -36,8 +46,13 @@ def validate() -> None:
 
 @main.command()
 @click.option("--suite", type=str, default=None, help="Suite name (development, regression)")
-@click.option("--scenario", type=str, default=None, help="Single scenario ID to run")
-@click.option("--agent", type=str, required=True, help="Agent config file path")
+@click.option(
+    "--scenario",
+    type=str,
+    default=None,
+    help="Path to a single scenario manifest file (YAML or JSON)",
+)
+@click.option("--agent", type=str, required=True, help="Agent to drive the trial: b0")
 @click.option("--trials", type=int, default=1, help="Number of trials to run")
 @click.option("--output", type=str, default=None, help="Output directory for artifacts")
 @click.option("--offline", is_flag=True, help="Run offline (no external services)")
@@ -53,9 +68,51 @@ def run(
 ) -> None:
     """Execute scenario trials against an agent configuration.
 
-    Specify either --suite (development, regression) or --scenario (single scenario_id).
+    Specify either --suite (development, regression) or --scenario (a path to
+    a single scenario manifest file).
+
+    Only the B0 scripted deterministic reference agent (--agent b0) is
+    supported today; --suite, --trials, and --faults are accepted for forward
+    compatibility with later tickets but are not yet implemented.
     """
-    click.echo("run: not yet implemented")
+    if suite is not None:
+        raise click.UsageError(
+            "--suite is not yet implemented (needs the suite validator from #7); "
+            "pass --scenario with a manifest file path instead"
+        )
+    if scenario is None:
+        raise click.UsageError("one of --scenario or --suite is required")
+    if agent not in SUPPORTED_AGENTS:
+        raise click.UsageError(
+            f"agent {agent!r} is not supported yet; supported agents: {', '.join(SUPPORTED_AGENTS)}"
+        )
+    if output is None:
+        raise click.UsageError("--output is required")
+    if faults:
+        raise click.UsageError("--faults is not yet implemented (needs the fault injector from #10)")
+
+    manifest_path = Path(scenario)
+    if not manifest_path.is_file():
+        raise click.UsageError(f"scenario manifest not found: {manifest_path}")
+
+    try:
+        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise click.UsageError(f"could not parse {manifest_path} as YAML: {error}") from error
+
+    try:
+        manifest = ScenarioManifest.model_validate(raw)
+    except ValidationError as error:
+        raise click.UsageError(f"{manifest_path} is not a valid scenario manifest: {error}") from error
+
+    outcome = execute_trial(
+        manifest=manifest, trial_id="trial_0001", artifacts_root=Path(output)
+    )
+    if outcome.error is not None:
+        click.echo(outcome.error, err=True)
+    else:
+        click.echo(str(outcome.trial_dir))
+    raise SystemExit(outcome.exit_code)
 
 
 @main.command()

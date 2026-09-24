@@ -38,7 +38,17 @@ def _reject_floats(payload: Any) -> None:
         return
 
 
-def _encode(payload: Any) -> Any:
+def encode_common(payload: Any) -> Any:
+    """Encode the value kinds every canonicalizer in the project agrees on.
+
+    Shared by `canonical_json` (this module) and
+    `maf_lab.schemas.canonical.artifact_canonical_json`, so the two cannot drift
+    on datetimes, enums or collections. Raises `TypeError` for anything neither
+    canonicalizer natively understands, including floats: this module's own
+    `default=` hook is never reached for a float because `_reject_floats` raises
+    first, and the artifact canonicalizer chains this function behind its own
+    float handling.
+    """
     if isinstance(payload, datetime):
         # RFC 3339 with a `Z` suffix, matching how Pydantic's JSON mode renders
         # UTC instants, so both serialization paths hash identically.
@@ -59,7 +69,7 @@ def canonical_json(payload: Any) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
         allow_nan=False,
-        default=_encode,
+        default=encode_common,
     )
 
 
