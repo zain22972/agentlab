@@ -1212,11 +1212,15 @@ Paths are relative to the repository root of `agentlab`; there is no project sub
 │   │   ├── base.py
 │   │   ├── maf.py
 │   │   └── mock.py
-│   ├── domain/refunds/
-│   │   ├── models.py
-│   │   ├── state.py
-│   │   ├── policy.py
-│   │   └── tools.py
+│   ├── domain/
+│   │   ├── money.py               # integer minor units + ISO currency
+│   │   ├── clock.py               # injected clock protocol + FakeClock
+│   │   ├── canonical.py           # canonical JSON + state/request hashing
+│   │   └── refunds/
+│   │       ├── models.py
+│   │       ├── state.py
+│   │       ├── policy.py
+│   │       └── tools.py
 │   ├── faults/
 │   ├── evidence/
 │   ├── recovery/

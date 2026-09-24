@@ -19,22 +19,20 @@ jobs:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff mypy click pydantic pyyaml pytest pytest-asyncio hypothesis
-      
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked --extra dev
+
       - name: Run ruff linter
-        run: PYTHONPATH=src python -m ruff check src/ tests/
-      
+        run: uv run ruff check src/ tests/
+
       - name: Run mypy type checker
-        run: PYTHONPATH=src python -m mypy src/ tests/
+        run: uv run mypy src/ tests/
 
   unit-tests:
     name: Unit Tests
@@ -44,26 +42,24 @@ jobs:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio click pydantic pyyaml hypothesis
-      
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked --extra dev
+
       - name: Run pytest
-        run: PYTHONPATH=src python -m pytest tests/ -v
+        run: uv run pytest tests/ -v
 
   schema-validation:
     name: Schema Validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Validate directory structure
         run: |
           # Check that required directories exist
@@ -73,13 +69,13 @@ jobs:
           test -d fixtures || (echo "fixtures directory missing" && exit 1)
           test -d configs || (echo "configs directory missing" && exit 1)
           echo "✓ All required directories present"
-      
+
       - name: Verify Python version pinning
         run: |
           test -f .python-version || (echo ".python-version file missing" && exit 1)
           grep -q "3.12" .python-version || (echo ".python-version does not pin 3.12" && exit 1)
           echo "✓ Python version correctly pinned to 3.12"
-      
+
       - name: Verify pyproject.toml exists and is valid
         run: |
           test -f pyproject.toml || (echo "pyproject.toml missing" && exit 1)
@@ -91,20 +87,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked
+
       - name: Verify CLI is callable
         run: |
-          python -m pip install --upgrade pip
-          pip install click pydantic pyyaml
-          PYTHONPATH=src python -m maf_lab.cli --version 2>&1 | grep -q "maf-lab" || (echo "CLI version check failed" && exit 1)
+          uv run maf-lab --version 2>&1 | grep -q "maf-lab" || (echo "CLI version check failed" && exit 1)
           echo "✓ CLI is callable and responsive"
-      
+
       - name: Verify CLI help works
         run: |
-          PYTHONPATH=src python -m maf_lab.cli --help 2>&1 | grep -q "Usage:" || (echo "CLI help check failed" && exit 1)
+          uv run maf-lab --help 2>&1 | grep -q "Usage:" || (echo "CLI help check failed" && exit 1)
           echo "✓ CLI help is working"
