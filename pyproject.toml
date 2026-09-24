@@ -31,6 +31,7 @@ dev = [
     "ruff==0.1.8",
     # Type checking
     "mypy==1.7.1",
+    "types-PyYAML==6.0.12.20240311",
     # Property testing
     "hypothesis==6.88.0",
 ]

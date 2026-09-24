@@ -335,6 +335,22 @@ class Refund(DomainModel):
         return Money(minor_units=self.amount_minor, currency=self.currency)
 
 
+SNAPSHOT_IDENTIFIER_FIELD: dict[str, str] = {
+    "customers": "customer_id",
+    "orders": "order_id",
+    "refunds": "refund_id",
+    "messages": "message_id",
+}
+"""Which field identifies an entity within each top-level snapshot collection.
+
+`RefundState.snapshot()` returns one list per collection, and both
+`evidence.diff` and `evaluators.state_assertions` key into those lists by this
+same identifier rather than by list position, so an entity's address survives
+another entity being added or removed. Defined once here, next to the entities
+whose field names it names, rather than duplicated in each consumer.
+"""
+
+
 class Message(DomainModel):
     """An outbound message queued for a customer."""
 
