@@ -1,0 +1,107 @@
+name: T0 Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  lint-and-type-check:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked --extra dev
+
+      - name: Run ruff linter
+        run: uv run ruff check src/ tests/
+
+      - name: Run mypy type checker
+        run: uv run mypy src/ tests/
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked --extra dev
+
+      - name: Run pytest
+        run: uv run pytest tests/ -v
+
+  schema-validation:
+    name: Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate directory structure
+        run: |
+          # Check that required directories exist
+          test -d src/maf_lab || (echo "src/maf_lab directory missing" && exit 1)
+          test -d tests || (echo "tests directory missing" && exit 1)
+          test -d scenarios || (echo "scenarios directory missing" && exit 1)
+          test -d fixtures || (echo "fixtures directory missing" && exit 1)
+          test -d configs || (echo "configs directory missing" && exit 1)
+          echo "✓ All required directories present"
+
+      - name: Verify Python version pinning
+        run: |
+          test -f .python-version || (echo ".python-version file missing" && exit 1)
+          grep -q "3.12" .python-version || (echo ".python-version does not pin 3.12" && exit 1)
+          echo "✓ Python version correctly pinned to 3.12"
+
+      - name: Verify pyproject.toml exists and is valid
+        run: |
+          test -f pyproject.toml || (echo "pyproject.toml missing" && exit 1)
+          grep -q 'requires-python = ">=3.12"' pyproject.toml || (echo "Python requirement not correctly specified" && exit 1)
+          echo "✓ pyproject.toml is valid and Python requirement is correct"
+
+  build-time-check:
+    name: Build-time Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies from the committed lockfile
+        run: uv sync --locked
+
+      - name: Verify CLI is callable
+        run: |
+          uv run maf-lab --version 2>&1 | grep -q "maf-lab" || (echo "CLI version check failed" && exit 1)
+          echo "✓ CLI is callable and responsive"
+
+      - name: Verify CLI help works
+        run: |
+          uv run maf-lab --help 2>&1 | grep -q "Usage:" || (echo "CLI help check failed" && exit 1)
+          echo "✓ CLI help is working"
